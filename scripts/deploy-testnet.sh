@@ -1,11 +1,6 @@
 #!/bin/bash
 set -e
 
-if [ -z "$DEPLOYER_SECRET" ]; then
-    echo "❌ Error: DEPLOYER_SECRET environment variable not set"
-    exit 1
-fi
-
 echo "🚀 Deploying to Stellar Testnet..."
 
 # Build first
