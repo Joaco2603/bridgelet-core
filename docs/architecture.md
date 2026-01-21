@@ -4,8 +4,6 @@
 **Last Updated:** January 21, 2026  
 **Status:** MVP
 
-> **Note**: This document describes the **intended API design** as specified in README.md (source of truth). The current MVP implementation may differ in some details. Where differences exist, they are noted with ⚠️ markers.
-
 ---
 
 ## Table of Contents
@@ -19,7 +17,6 @@
 5. [Design Decisions](#design-decisions)
 6. [Integration Points](#integration-points)
 7. [Limitations](#limitations)
-8. [Future Roadmap](#future-roadmap)
 
 ---
 
@@ -28,27 +25,6 @@
 ### Overview
 
 Bridgelet Core is a suite of Soroban smart contracts that enable secure, single-use ephemeral accounts on the Stellar network. The system enforces business logic restrictions on temporary accounts, ensuring they can only receive one payment and be swept to a pre-authorized destination or expire after a defined period.
-
-### Problem Statement
-
-Traditional Stellar accounts are permanent and flexible by design. However, certain use cases require temporary accounts with strict restrictions:
-
-- **One-time payment links** - Accounts that accept exactly one payment then become unusable
-- **Claim-based transfers** - Funds that can only be moved to specific authorized destinations
-- **Time-bounded accounts** - Accounts that automatically expire and return funds if unclaimed
-- **Auditability** - Complete on-chain event trail for compliance and monitoring
-
-Creating these restrictions purely at the application layer is insufficient—they must be enforced cryptographically at the protocol level.
-
-### Solution Approach
-
-Bridgelet Core uses smart contracts to enforce ephemeral account restrictions directly on-chain:
-
-1. **Contract-enforced state machine** - Accounts transition through defined states (Active → PaymentReceived → Swept/Expired)
-2. **Single payment validation** - Contract rejects multiple payments to the same account
-3. **Authorization requirements** - Sweeps require cryptographic proof of authorization
-4. **Time-based expiration** - Ledger-based expiry automatically returns funds to recovery address
-5. **Event emission** - All state changes emit events for off-chain monitoring and indexing
 
 ### Target Audience
 
@@ -263,8 +239,6 @@ The contract uses Soroban's **instance storage** exclusively, which persists sta
 
 **Storage Type Rationale**: Instance storage is used (vs. temporary storage) because account state must persist across multiple transactions throughout the account's lifecycle. The cost is justified by the requirement for durable state.
 
-> **⚠️ Current MVP Implementation**: MVP uses `ExpiryLedger` (u32) and `RecoveryAddress` instead of `ExpiryTimestamp` and `SweepDestination`.
-
 #### Function Reference
 
 ##### `initialize()`
@@ -291,28 +265,6 @@ pub fn initialize(
 **Errors**:
 - `Error::AlreadyInitialized` - Contract already initialized (can only initialize once)
 - `Error::InvalidExpiry` - `expiry_timestamp` <= current timestamp (must be in future)
-
-**Behavior**:
-1. Verifies contract not already initialized
-2. Requires authorization from `creator`
-3. Validates `expiry_timestamp` is in the future
-4. Stores initialization data in instance storage
-5. Stores optional `sweep_destination` (if provided)
-6. Sets status to `Active`
-7. Emits `AccountCreated` event
-
-**Usage Example**:
-```rust
-// SDK calls initialize when creating ephemeral account
-let creator = Address::from_str("GABC...");
-let expiry = env.ledger().timestamp() + 86400; // 24 hours from now
-let destination = Some(Address::from_str("GDEF...")); // Optional
-
-contract.initialize(env, creator, destination, expiry)?;
-```
-
-> **⚠️ Current MVP Implementation**: The MVP uses `expiry_ledger: u32` and `recovery_address: Address` parameters instead of `sweep_destination` and `expiry_timestamp`. This will be migrated to the intended API in a future version.
-
 ---
 
 ##### `record_payment()`
@@ -338,23 +290,6 @@ pub fn record_payment(
 - `Error::NotInitialized` - Contract not initialized
 - `Error::PaymentAlreadyReceived` - Payment already recorded (enforces single payment)
 - `Error::InvalidAmount` - Amount <= 0
-
-**Behavior**:
-1. Verifies contract initialized
-2. Checks no prior payment recorded (single payment enforcement)
-3. Validates amount > 0
-4. Stores payment details in instance storage
-5. Updates status to `PaymentReceived`
-6. Emits `PaymentReceived` event
-
-**Usage Example**:
-```rust
-// SDK detects payment via Horizon, then records it
-let amount = 1000000000i128; // 100 XLM (7 decimals)
-let xlm_asset = Address::from_str("STELLAR_NATIVE...");
-
-contract.record_payment(env, amount, xlm_asset)?;
-```
 
 **Important**: This function should be called by the SDK immediately after detecting a payment via Horizon monitoring. The SDK is responsible for payment detection; the contract only validates and records.
 
@@ -384,17 +319,6 @@ pub fn sweep(
 - `Error::AccountExpired` - Account has reached expiry timestamp
 - `Error::Unauthorized` - Invalid authorization (via Soroban auth system)
 
-**Behavior**:
-1. Verifies contract initialized
-2. Checks status not already `Swept`
-3. Verifies payment has been received
-4. Checks account not expired
-5. Validates authorization via Soroban's built-in authorization system
-6. Retrieves payment amount and asset
-7. Updates status to `Swept` (prevents reentrancy)
-8. Records `destination` in `SweptTo` storage
-9. Emits `SweepExecuted` event
-
 **Authorization Flow**:
 ```
 User Request → SDK calls sweep() with proper auth context → 
@@ -408,18 +332,6 @@ SDK executes actual token transfer via Stellar SDK
 - Actual transfer is performed by SDK via Stellar SDK after contract approval
 - This separation ensures contract focuses on business logic, not token mechanics
 
-**Usage Example**:
-```rust
-// SDK calls sweep with proper authorization context
-let destination = Address::from_str("GXYZ..."); // User's permanent wallet
-
-contract.sweep(env, destination)?;
-
-// After contract approval, SDK executes actual transfer
-```
-
-> **⚠️ Current MVP Implementation**: The MVP includes an `auth_signature: BytesN<64>` parameter with placeholder verification. The intended design uses Soroban's native authorization system instead.
-
 ---
 
 ##### `is_expired()`
@@ -432,22 +344,6 @@ pub fn is_expired(env: Env) -> bool
 ```
 
 **Returns**: `true` if current timestamp >= expiry_timestamp, `false` otherwise
-
-**Behavior**:
-1. Returns `false` if not initialized
-2. Retrieves `expiry_timestamp` from storage
-3. Compares against current ledger timestamp (ledger time)
-4. Returns `true` if expired, `false` if still valid
-
-**Usage Example**:
-```rust
-if contract.is_expired(env.clone()) {
-    // Account expired, must call expire() to return funds
-    contract.expire(env)?;
-}
-```
-
-> **⚠️ Current MVP Implementation**: The MVP uses ledger sequence numbers (`expiry_ledger: u32`) instead of Unix timestamps.
 
 ---
 
@@ -467,23 +363,6 @@ pub fn expire(env: Env) -> Result<(), Error>
 - `Error::NotExpired` - Current timestamp < expiry_timestamp (too early)
 - `Error::InvalidStatus` - Already swept or expired (terminal states)
 
-**Behavior**:
-1. Verifies contract initialized
-2. Checks status is not already `Swept` or `Expired`
-3. Verifies current timestamp >= expiry_timestamp
-4. Retrieves sweep destination or default recovery address
-5. Updates status to `Expired`
-6. Records recovery address in `SweptTo`
-7. Calculates amount to return (0 if no payment received)
-8. Emits `AccountExpired` event
-
-**Usage Example**:
-```rust
-// Anyone can call expire() after expiry_ledger reached
-contract.expire(env)?;
-// SDK then transfers any funds to recovery_address
-```
-
 **Important**: This function can be called by anyone once the expiry ledger is reached. The SDK is responsible for executing the actual token transfer to the recovery address after contract approval.
 
 ---
@@ -498,22 +377,6 @@ pub fn get_status(env: Env) -> AccountStatus
 ```
 
 **Returns**: Current `AccountStatus` enum value
-
-**Behavior**:
-- Returns `AccountStatus::Active` if not initialized
-- Otherwise returns stored status from instance storage
-
-**Usage Example**:
-```rust
-let status = contract.get_status(env);
-match status {
-    AccountStatus::Active => { /* waiting for payment */ },
-    AccountStatus::PaymentReceived => { /* ready for sweep */ },
-    AccountStatus::Swept => { /* completed */ },
-    AccountStatus::Expired => { /* expired */ },
-}
-```
-
 ---
 
 ##### `get_info()`
@@ -543,22 +406,6 @@ pub struct AccountInfo {
 }
 ```
 
-**Usage Example**:
-```rust
-let info = contract.get_info(env)?;
-println!("Creator: {}", info.creator);
-println!("Status: {:?}", info.status);
-println!("Expires at: {}", info.expiry_timestamp); // Unix timestamp
-if let Some(dest) = info.sweep_destination {
-    println!("Sweep destination: {}", dest);
-}
-if let Some(amount) = info.payment_amount {
-    println!("Payment amount: {}", amount);
-}
-```
-
-> **⚠️ Current MVP Implementation**: MVP uses `expiry_ledger` and `recovery_address` instead.
-
 #### Events
 
 The contract emits events for all state changes to enable off-chain monitoring, indexing, and auditability.
@@ -584,8 +431,6 @@ pub struct AccountCreated {
 
 **Usage**: Off-chain indexers can track account creation and monitor for expiration. The `account_id` enables efficient filtering by account.
 
-> **⚠️ Current MVP Implementation**: MVP events use `expiry_ledger: u32` and don't include `account_id`.
-
 ---
 
 ##### `PaymentReceived`
@@ -606,8 +451,6 @@ pub struct PaymentReceived {
 **Purpose**: Signals that the first (and only) payment has been recorded.
 
 **Usage**: SDK can trigger sweep workflow after detecting this event. The `account_id` enables filtering events by specific account.
-
-> **⚠️ Current MVP Implementation**: MVP events don't include `account_id` field.
 
 ---
 
@@ -630,8 +473,6 @@ pub struct SweepExecuted {
 
 **Usage**: Off-chain systems can confirm successful sweep completion. The `account_id` enables filtering events by specific account.
 
-> **⚠️ Current MVP Implementation**: MVP events include `asset` field and don't include `account_id`.
-
 ---
 
 ##### `AccountExpired`
@@ -650,8 +491,6 @@ pub struct AccountExpired {
 **Purpose**: Signals that account expired and funds are being returned.
 
 **Usage**: Off-chain systems can detect expiration and handle fund recovery. The `account_id` identifies which account expired.
-
-> **⚠️ Current MVP Implementation**: MVP events include `recovery_address` and `amount_returned` fields instead of just `account_id`.
 
 #### Error Types
 
@@ -813,101 +652,6 @@ sequenceDiagram
     Note over Client,Contract: Account now ready to receive payment
 ```
 
-**Step-by-Step Explanation**:
-
-1. **Client Request**: User/application requests creation of ephemeral account
-2. **Keypair Generation**: SDK generates a new Stellar keypair for the ephemeral account
-3. **Account Creation**: SDK creates Stellar account with 1 XLM base reserve
-4. **Contract Initialization**: 
-   - SDK calls `initialize()` on EphemeralAccount contract
-   - Passes creator address, expiry ledger, and recovery address
-   - Contract verifies creator authorization (requires signature)
-   - Contract validates expiry is in future
-   - Contract stores initialization data in instance storage
-   - Contract sets status to `Active`
-   - Contract emits `AccountCreated` event
-5. **Payment Monitoring**: SDK subscribes to Horizon for payment notifications
-6. **Return to Client**: SDK returns public key and contract ID
-
-**Error Scenarios**:
-- Account creation fails → SDK returns error, no contract call
-- `AlreadyInitialized` → Contract already initialized (prevents re-initialization)
-- `InvalidExpiry` → Expiry ledger in past (validation error)
-
-**Time Estimates**:
-- Account creation: ~5 seconds (1 ledger)
-- Contract initialization: ~5 seconds (1 ledger)
-- Total: ~10 seconds
-
----
-
-### Payment Flow
-
-```mermaid
-sequenceDiagram
-    participant Sender as External Sender
-    participant Stellar as Stellar Network
-    participant Horizon as Horizon API
-    participant SDK as Bridgelet SDK
-    participant Contract as EphemeralAccount
-
-    Sender->>Stellar: Send payment to ephemeral account
-    Stellar->>Stellar: Validate and execute payment
-    Stellar-->>Sender: Payment confirmed
-    
-    Stellar->>Horizon: Publish ledger events
-    Horizon->>SDK: Payment notification (streaming)
-    
-    SDK->>SDK: Validate payment details
-    Note over SDK: Check: First payment?<br/>Check: Valid amount?<br/>Check: Expected asset?
-    
-    SDK->>Contract: record_payment(amount, asset)
-    Note over Contract: Verify not initialized yet
-    Note over Contract: Verify no prior payment
-    Note over Contract: Validate amount > 0
-    Contract->>Contract: Store payment details
-    Contract->>Contract: Set status = PaymentReceived
-    Contract->>Contract: Emit PaymentReceived event
-    Contract-->>SDK: Payment recorded
-    
-    SDK->>SDK: Update internal state
-    SDK->>SDK: Notify client application
-    
-    Note over SDK,Contract: Account now ready for sweep
-```
-
-**Step-by-Step Explanation**:
-
-1. **External Payment**: Someone sends payment (XLM, USDC, etc.) to ephemeral account
-2. **Stellar Execution**: Stellar network validates and executes payment
-3. **Event Publishing**: Payment appears in ledger, Horizon API publishes event
-4. **SDK Detection**: SDK's Horizon subscription receives payment notification
-5. **Validation**: SDK validates payment details:
-   - Confirms this is the first payment
-   - Validates amount is positive
-   - Checks asset type matches expected
-6. **Recording**: SDK calls `record_payment()` on contract
-7. **Contract Validation**:
-   - Verifies contract is initialized
-   - Checks no prior payment recorded (enforces single payment)
-   - Validates amount > 0
-8. **State Update**:
-   - Contract stores payment amount and asset
-   - Contract updates status to `PaymentReceived`
-   - Contract emits `PaymentReceived` event
-9. **Notification**: SDK updates internal state and notifies client
-
-**Error Scenarios**:
-- `PaymentAlreadyReceived` → Second payment attempted (rejected)
-- `InvalidAmount` → Amount <= 0 (validation error)
-- `NotInitialized` → Contract not initialized (setup error)
-
-**Single Payment Enforcement**:
-
-The contract enforces that only ONE payment can be recorded. If a second payment is sent to the Stellar account, the SDK will detect it but the contract will reject the `record_payment()` call with `PaymentAlreadyReceived` error.
-
-**Important**: The sender's funds are NOT automatically returned if a second payment is sent. The Stellar account receives the payment, but the contract does not track it. This is a known limitation of the single-payment design.
-
 ---
 
 ### Sweep Flow
@@ -953,54 +697,6 @@ sequenceDiagram
     Client-->>User: Funds received in wallet
 ```
 
-**Step-by-Step Explanation**:
-
-1. **User Initiates**: User clicks "Claim" or "Sweep to Wallet" in client application
-2. **Destination Provided**: User provides or confirms destination wallet address
-3. **SDK Call**: Client calls SDK's `sweepToWallet()` function
-4. **Signature Generation**: 
-   - SDK generates authorization signature
-   - Signs hash of (destination, timestamp, nonce) with authorized key
-   - ⚠️ Current MVP: signature verification is placeholder
-5. **Contract Authorization**:
-   - SDK calls `sweep(destination, auth_signature)` on contract
-   - Contract performs validation checks:
-     - Initialized? ✓
-     - Status not already Swept? ✓
-     - Payment received? ✓
-     - Not expired? ✓
-   - Contract verifies authorization signature (⚠️ currently placeholder)
-6. **State Update** (Reentrancy Protection):
-   - Contract updates status to `Swept` BEFORE external calls
-   - This prevents reentrancy attacks
-   - Contract stores destination in `swept_to` field
-   - Contract emits `SweepExecuted` event
-7. **Transfer Execution**:
-   - SDK receives contract approval
-   - SDK executes actual token transfer via Stellar SDK
-   - Transfers `payment_amount` of `payment_asset` from ephemeral to destination
-8. **Reserve Reclamation** (Optional):
-   - SDK closes ephemeral account
-   - 1 XLM base reserve returned to destination or recovery address
-9. **Confirmation**: SDK confirms completion to client, user sees funds
-
-**Error Scenarios**:
-- `NotInitialized` → Contract not set up
-- `AlreadySwept` → Already swept (prevents double-sweep)
-- `NoPaymentReceived` → No payment to sweep
-- `AccountExpired` → Expiry ledger reached (must use expire() instead)
-- `Unauthorized` → Invalid authorization signature
-
-**Security Notes**:
-
-- **Reentrancy Protection**: Status updated to `Swept` BEFORE any external operations
-- **Authorization**: Requires valid signature (⚠️ MVP implementation is placeholder)
-- **Idempotency**: Cannot sweep twice due to status check
-
-**⚠️ Current MVP Limitation**:
-
-The signature verification in `sweep()` is currently a placeholder that always returns `Ok(())`. The MVP trusts the SDK to only call `sweep()` with valid authorization. Future versions will implement proper ED25519 signature verification on-chain.
-
 ---
 
 ### Expiration Flow
@@ -1043,63 +739,6 @@ sequenceDiagram
     
     Note over Contract: Terminal state: Expired
 ```
-
-**Step-by-Step Explanation**:
-
-1. **Expiry Condition**: Current ledger sequence reaches or exceeds `expiry_ledger`
-2. **Expiration Call**: 
-   - ANY user can call `expire()` after expiry ledger reached
-   - Does not require special authorization
-   - This enables permissionless cleanup
-3. **Contract Validation**:
-   - Verifies contract is initialized
-   - Checks status is not already `Swept` or `Expired` (terminal states)
-   - Confirms `is_expired()` returns `true`
-4. **State Update**:
-   - Contract retrieves `recovery_address` from storage
-   - Updates status to `Expired`
-   - Records recovery address in `swept_to` field
-5. **Amount Calculation**:
-   - If payment was received: `amount_returned = payment_amount`
-   - If no payment: `amount_returned = 0`
-6. **Event Emission**: Contract emits `AccountExpired` event with recovery address and amount
-7. **Fund Transfer** (Optional, Off-Chain):
-   - SDK or monitoring service detects `AccountExpired` event
-   - Executes transfer of funds to recovery address
-   - Closes ephemeral account
-   - Reclaims 1 XLM base reserve
-
-**Error Scenarios**:
-- `NotInitialized` → Contract not set up
-- `NotExpired` → Called before expiry_ledger reached (too early)
-- `InvalidStatus` → Already swept or expired (terminal states)
-
-**Design Rationale**:
-
-**Why allow anyone to call expire()?**
-- Ensures expired accounts can always be cleaned up
-- Prevents funds from being locked if creator disappears
-- Enables automated cleanup services
-- No risk: funds always go to pre-defined recovery_address
-
-**Expiry Timing Example**:
-
-Using Unix timestamps:
-- 24 hours = now + 86400 seconds
-- 7 days = now + 604800 seconds
-- If created at timestamp 1705843200 (Jan 21, 2024 12:00:00 UTC) with 24-hour expiry:
-  - `expiry_timestamp = 1705929600`
-  - Can call `expire()` anytime after January 22, 2024 12:00:00 UTC
-
-**Sweep Destination**:
-
-The sweep destination can be optionally specified at initialization. If not provided (`None`), it can be set when calling `sweep()`. This provides flexibility:
-- Pre-authorize specific destination at creation
-- Or allow dynamic destination at sweep time
-- Typically set to:
-  - User's permanent wallet (if known)
-  - Organization treasury address
-  - Left as `None` for claim-based flows
 
 ---
 
@@ -1179,186 +818,23 @@ This section explains the rationale behind key architectural choices in Bridgele
 ---
 
 ### Why Timestamp-Based Expiry?
-
-**Decision**: Use Unix timestamps for expiration (`expiry_timestamp: u64`) instead of ledger sequence numbers.
-
-**Rationale**:
-
-1. **Universal Standard**:
-   - Unix timestamps are universally understood
-   - No conversion needed across systems
-   - Standard in all programming languages
-
-2. **Better Developer Experience**:
-   - Intuitive: "24 hours from now" = `now + 86400`
-   - No need to learn ledger-based time
-   - Easier integration with external systems
-
-3. **Ledger Time Support**:
-   - Stellar provides `env.ledger().timestamp()` for ledger time
-   - Timestamp-based expiration uses ledger time (not wall clock time)
-   - Still deterministic and blockchain-native
-
-4. **Flexibility**:
-   - Easier to reason about exact expiry times
-   - Better for scheduling and automation
-   - More familiar to developers from other ecosystems
-
-**Implementation**:
-- Uses `env.ledger().timestamp()` for current time
-- Simple comparison: `current_timestamp >= expiry_timestamp`
-- Ledger time ensures determinism (not dependent on node clocks)
-
-**Time Calculation Examples**:
-```
-1 hour = now + 3600
-24 hours = now + 86400
-7 days = now + 604800
-30 days = now + 2592000
-```
-
-> **⚠️ Current MVP Implementation**: MVP uses ledger sequence numbers (`expiry_ledger: u32`) for simplicity. Will migrate to timestamps in production version.
-
+Uses unix timestamps are for universally compatible and better developer experience.
 ---
 
 ### Why Single Payment Restriction?
-
-**Decision**: Enforce maximum one payment per ephemeral account.
-
-**Rationale**:
-
-1. **Use Case Alignment**:
-   - Designed for payment links (one-time use)
-   - Designed for claim flows (single claimable amount)
-   - Simplifies lifecycle management
-
-2. **Security**:
-   - Prevents amount confusion (which payment to sweep?)
-   - Eliminates partial sweep scenarios
-   - Clear "used" vs "unused" state
-
-3. **Implementation Simplicity**:
-   - Single boolean flag: `payment_received`
-   - No array storage (cheaper)
-   - Straightforward state machine
-
-4. **Auditability**:
-   - One payment = one event = clear audit trail
-   - No ambiguity about which funds were swept
-
-**Tradeoff**: Less flexible than multi-payment accounts. Future versions could support multiple payments with more complex accounting.
-
-**Known Limitation**: If someone sends a second payment to the Stellar account, the contract will reject `record_payment()` and funds may be stuck. This is documented as a current limitation.
-
+Limiting ephemeral accounts to a single payment simplifies security, state management, and auditability.
 ---
 
 ### Event Design: Why `symbol_short!` Macro?
-
-**Decision**: Use `symbol_short!` macro for event names (10-char limit).
-
-**Rationale**:
-
-1. **Storage Efficiency**:
-   - Symbols limited to 10 characters
-   - Shorter event names = less on-chain data
-   - Lower transaction fees
-
-2. **Soroban Convention**:
-   - Standard pattern in Soroban SDK
-   - Used by Stellar's own contracts
-   - Well-documented and supported
-
-3. **Sufficient for Indexing**:
-   - Off-chain indexers only need unique identifiers
-   - 10 characters sufficient for semantic meaning
-   - Event payload contains detailed data
-
-**Event Name Choices**:
-- `"created"` - Account creation
-- `"payment"` - Payment received
-- `"swept"` - Sweep executed
-- `"expired"` - Account expired
-
-**Tradeoff**: Less descriptive than full names like `"account_created"`, but cost savings justified.
-
+The symbol_short! macro is used to minimize on-chain storage costs.
 ---
 
 ### Why Soroban Native Authorization for Sweep?
-
-**Decision**: Use Soroban's built-in authorization system for `sweep()` instead of explicit signature parameters.
-
-**Rationale**:
-
-1. **Cleaner API**:
-   - No need to pass signature explicitly
-   - Authorization handled by Soroban runtime
-   - Simpler function signature
-
-2. **Better Security**:
-   - Leverage Stellar's native authorization model
-   - Built-in replay protection
-   - Standard authorization patterns
-
-3. **Flexibility**:
-   - Authorization mechanism can evolve without API changes
-   - Supports multiple authorization types (signature, account, contract)
-   - Future-proof design
-
-4. **Developer Experience**:
-   - Familiar pattern for Stellar developers
-   - Less code to write and maintain
-   - Fewer parameters to manage
-
-**Implementation**:
-- Contract uses `destination.require_auth()` or similar
-- Soroban runtime handles signature verification
-- SDK provides proper auth context when invoking
-
-**Security Considerations**:
-- Authorization enforced at runtime by Soroban
-- No custom signature verification needed
-- Standard Stellar authorization patterns apply
-
-> **⚠️ Current MVP Implementation**: MVP includes explicit `auth_signature: BytesN<64>` parameter with placeholder verification. This will be replaced with Soroban native auth in production.
-
+Soroban’s built-in authorization is used for sweeping funds to provide stronger security, cleaner APIs, and future-proof authorization handling without custom signature logic.
 ---
 
 ### Why Reentrancy Protection via Status Update?
-
-**Decision**: Update `status` to `Swept` BEFORE executing external operations.
-
-**Rationale**:
-
-1. **Reentrancy Attack Prevention**:
-   - If external call could callback into contract
-   - Status already `Swept`, so second sweep fails with `AlreadySwept` error
-   - Classic "checks-effects-interactions" pattern
-
-2. **Soroban Execution Model**:
-   - Soroban has built-in reentrancy protection
-   - Additional defense-in-depth
-   - Follows Ethereum/Solidity best practices
-
-3. **Idempotency**:
-   - Once swept, cannot sweep again
-   - Safe to retry failed transfers off-chain
-   - No risk of double-spend
-
-**Implementation Pattern**:
-```rust
-// ❌ WRONG: External call before state update
-let amount = storage::get_payment_amount(&env);
-execute_transfer(env, destination, amount)?;  // Could reenter!
-storage::set_status(&env, AccountStatus::Swept);
-
-// ✅ CORRECT: State update before external call
-storage::set_status(&env, AccountStatus::Swept);  // Reentrancy protection
-let amount = storage::get_payment_amount(&env);
-execute_transfer(env, destination, amount)?;
-```
-
-**Note**: In current MVP, actual transfer is performed off-chain by SDK, so reentrancy risk is minimal. However, pattern is implemented for future SweepController integration.
-
+Updating the account status before external operations prevents reentrancy attacks, enforces idempotency, and follows established smart contract safety patterns.
 ---
 
 ## Integration Points
@@ -1372,47 +848,9 @@ The Bridgelet SDK (NestJS) serves as the primary integration layer between clien
 #### Initialization Workflow
 
 **SDK Responsibilities**:
-1. Generate ephemeral Stellar keypair
-2. Fund account with base reserve (1 XLM)
-3. Calculate expiry ledger (current + desired duration)
-4. Call `initialize()` on contract
-5. Subscribe to Horizon for payment events
-6. Return account details to client
+#### SDK Integration
+The SDK handles account creation, payment monitoring via Horizon API, authorization generation, and token transfer execution after contract approval.
 
-**Code Example** (Conceptual):
-```typescript
-async createEphemeralAccount(
-  sweepDestination: string | null,
-  expiryHours: number
-): Promise<EphemeralAccount> {
-  // Generate keypair
-  const keypair = Keypair.random();
-  
-  // Create account on Stellar
-  await this.stellar.createAccount(keypair.publicKey(), '1');
-  
-  // Calculate expiry timestamp (Unix seconds)
-  const currentTime = Math.floor(Date.now() / 1000);
-  const expiryTimestamp = currentTime + (expiryHours * 3600);
-  
-  // Deploy and initialize contract
-  const contractId = await this.deployContract(keypair);
-  await this.invokeContract(contractId, 'initialize', {
-    creator: this.creatorAddress,
-    sweep_destination: sweepDestination, // Optional
-    expiry_timestamp: expiryTimestamp,
-  });
-  
-  // Subscribe to payments
-  this.subscribeToPayments(keypair.publicKey());
-  
-  return {
-    publicKey: keypair.publicKey(),
-    contractId,
-    expiryTimestamp,
-  };
-}
-```
 
 #### Payment Monitoring via Horizon
 
@@ -1423,46 +861,6 @@ async createEphemeralAccount(
 4. Call `record_payment()` on contract
 5. Notify client application
 
-**Code Example** (Conceptual):
-```typescript
-subscribeToPayments(accountId: string) {
-  this.horizon
-    .payments()
-    .forAccount(accountId)
-    .cursor('now')
-    .stream({
-      onmessage: async (payment) => {
-        // Filter for actual payments (not account creation)
-        if (payment.type !== 'payment') return;
-        
-        // Validate this is the first payment
-        const contractId = await this.getContractId(accountId);
-        const status = await this.getAccountStatus(contractId);
-        if (status !== 'Active') {
-          console.warn('Payment received but account not Active');
-          return;
-        }
-        
-        // Record payment in contract
-        await this.invokeContract(contractId, 'record_payment', {
-          amount: payment.amount,
-          asset: payment.asset_code,
-        });
-        
-        // Notify application
-        this.emit('payment:received', {
-          accountId,
-          amount: payment.amount,
-          asset: payment.asset_code,
-        });
-      },
-      onerror: (error) => {
-        console.error('Horizon stream error:', error);
-      },
-    });
-}
-```
-
 #### Sweep Execution Coordination
 
 **SDK Responsibilities**:
@@ -1471,40 +869,6 @@ subscribeToPayments(accountId: string) {
 3. Wait for contract approval
 4. Execute token transfer via Stellar SDK
 5. Optionally close account and reclaim reserve
-
-**Code Example** (Conceptual):
-```typescript
-async sweepToWallet(
-  contractId: string,
-  destinationAddress: string
-): Promise<void> {
-  // Call contract with proper authorization context
-  // Soroban handles authorization verification
-  await this.invokeContract(contractId, 'sweep', {
-    destination: destinationAddress,
-  });
-  
-  // Get payment details
-  const info = await this.getAccountInfo(contractId);
-  const ephemeralAccount = await this.getEphemeralAccount(contractId);
-  
-  // Execute token transfer
-  await this.stellar.transfer({
-    from: ephemeralAccount.publicKey,
-    to: destinationAddress,
-    amount: info.payment_amount,
-    asset: info.payment_asset,
-  });
-  
-  // Reclaim base reserve
-  await this.stellar.mergeAccount({
-    from: ephemeralAccount.publicKey,
-    to: destinationAddress,
-  });
-  
-  console.log(`Swept ${info.payment_amount} to ${destinationAddress}`);
-}
-```
 
 ---
 
@@ -1520,33 +884,6 @@ async sweepToWallet(
 2. **Database**: Store indexed events with timestamps
 3. **Query API**: Provide endpoints for event lookup
 4. **Alerting**: Notify users of relevant events
-
-**Event Schema** (Conceptual):
-```sql
-CREATE TABLE ephemeral_account_events (
-  id SERIAL PRIMARY KEY,
-  account_id VARCHAR(56) NOT NULL,
-  contract_id VARCHAR(56) NOT NULL,
-  event_type VARCHAR(20) NOT NULL,  -- 'created', 'payment', 'swept', 'expired'
-  ledger_sequence INTEGER NOT NULL,
-  timestamp TIMESTAMP NOT NULL,
-  payload JSONB NOT NULL,
-  INDEX idx_account_id (account_id),
-  INDEX idx_contract_id (contract_id),
-  INDEX idx_event_type (event_type),
-  INDEX idx_ledger_sequence (ledger_sequence)
-);
-```
-
-**Indexer Workflow**:
-```
-1. Subscribe to Stellar event stream
-2. Filter for EphemeralAccount contract events
-3. Parse event payload (extract account_id)
-4. Store in database (indexed by account_id)
-5. Trigger notifications (if applicable)
-6. Update analytics
-```
 
 **Benefits of account_id in Events**:
 - Efficient filtering: Query events for specific account
@@ -1591,551 +928,3 @@ CREATE TABLE ephemeral_account_events (
 - Payment detected but contract call fails → Retry with exponential backoff
 - Multiple payments detected → Log warning, only record first
 - Contract already has payment → Log duplicate, skip
-
----
-
-### Monitoring & Observability
-
-#### Metrics to Track
-
-**Account Metrics**:
-- Total ephemeral accounts created
-- Accounts by status (Active, PaymentReceived, Swept, Expired)
-- Average time to payment
-- Average time to sweep
-- Expiration rate (% accounts that expire vs sweep)
-
-**Payment Metrics**:
-- Total payments recorded
-- Payment amounts by asset type
-- Failed payment attempts (double payments)
-- Payment-to-sweep conversion rate
-
-**Sweep Metrics**:
-- Total sweeps executed
-- Sweep success rate
-- Average sweep time
-- Failed sweep attempts
-
-**Error Metrics**:
-- Contract errors by type
-- SDK errors
-- Horizon API errors
-- Signature validation failures
-
-#### Logging Strategy
-
-**Contract Events → Structured Logs**:
-```typescript
-// AccountCreated event
-{
-  event: 'account.created',
-  accountId: 'GABC...',
-  contractId: 'CABC...',
-  creator: 'GABC...',
-  expiry: 1705843200,  // Unix timestamp
-  timestamp: '2026-01-21T10:00:00Z',
-  ledger: 1234500,
-}
-
-// PaymentReceived event
-{
-  event: 'account.payment',
-  accountId: 'GABC...',
-  contractId: 'CABC...',
-  amount: '100.0000000',
-  asset: 'native',
-  timestamp: '2026-01-21T10:05:00Z',
-  ledger: 1234560,
-}
-
-// SweepExecuted event
-{
-  event: 'account.swept',
-  accountId: 'GABC...',
-  contractId: 'CABC...',
-  destination: 'GXYZ...',
-  amount: '100.0000000',
-  timestamp: '2026-01-21T10:10:00Z',
-  ledger: 1234620,
-}
-```
-
-#### Alerting Rules
-
-**Critical Alerts**:
-- Contract deployment failure
-- High error rate (>5% in 5 minutes)
-- Payment monitoring service down
-- Signature generation service down
-
-**Warning Alerts**:
-- High expiration rate (>20% of accounts)
-- Slow sweep times (>10 minutes average)
-- Failed sweep attempts (>3 for single account)
-- High ledger sequence (approaching u32 max)
-
-**Informational**:
-- Daily summary statistics
-- Large payment detected (>$1000 equivalent)
-- Account approaching expiry (1 hour remaining)
-
----
-
-## Limitations
-
-This section honestly assesses current limitations and constraints of the Bridgelet Core MVP.
-
-### MVP Limitations
-
-#### 1. Single Payment Only
-
-**Limitation**: Each ephemeral account can receive exactly one payment.
-
-**Impact**:
-- If sender accidentally sends multiple payments, only first is tracked
-- Subsequent payments are NOT automatically returned
-- Funds may be stuck in Stellar account but not tracked by contract
-
-**Workaround**: SDK can detect extra payments and manually handle returns
-
-**Future**: Support multiple payments with array storage and more complex accounting
-
----
-
-#### 2. One-Time Use Accounts
-
-**Limitation**: Accounts are single-use. After sweep or expiry, account is effectively dead.
-
-**Impact**:
-- Cannot reuse ephemeral account for another payment cycle
-- Must create new account for each use case
-- Higher account creation overhead
-
-**Rationale**: Simplifies state management and security
-
-**Future**: Support account "reset" function to enable reuse
-
----
-
-#### 3. API Parameter Differences (MVP vs Intended)
-
-**Limitation**: Current MVP uses different parameters than intended API.
-
-**MVP Implementation**:
-- `initialize(creator, expiry_ledger: u32, recovery_address)`
-- `sweep(destination, auth_signature: BytesN<64>)`
-- Events without `account_id`
-
-**Intended API (README.md)**:
-- `initialize(creator, sweep_destination: Option<Address>, expiry_timestamp: u64)`
-- `sweep(destination)` with Soroban native auth
-- Events with `account_id`
-
-**Future**: v2.0 will migrate to intended API specification
-
----
-
-#### 4. No Batch Operations
-
-**Limitation**: Each account operation requires separate transaction.
-
-**Impact**:
-- Cannot sweep multiple accounts atomically
-- Cannot initialize multiple accounts in one transaction
-- Higher transaction fees for bulk operations
-
-**Future**: Implement batch functions in SweepController
-
----
-
-#### 5. SweepController Not Implemented
-
-**Limitation**: Actual token transfers happen off-chain in SDK.
-
-**Impact**:
-- No on-chain guarantee of transfer execution
-- SDK must handle transfer logic
-- Less composability with other contracts
-
-**Rationale**: MVP focuses on authorization layer
-
-**Future**: Implement SweepController contract for on-chain transfers
-
----
-
-#### 6. No Multi-Sig Support
-
-**Limitation**: Single creator address, single recovery address.
-
-**Impact**:
-- No multi-sig governance
-- No shared control over accounts
-- Single point of failure for recovery
-
-**Future**: Support multi-sig addresses for creator and recovery
-
----
-
-### Scalability Considerations
-
-#### Storage Costs
-
-**Current**: Each account uses 9 instance storage entries
-
-**Cost per Account**:
-- Storage: ~0.009 XLM
-- Transactions (init + payment + sweep): ~0.003 XLM
-- Total: ~0.012 XLM per account (~$0.0012 at $0.10/XLM)
-
-**Scaling**: At 1 million accounts:
-- Storage cost: 9,000 XLM (~$900)
-- Transaction fees: 3,000 XLM (~$300)
-- Total: ~$1,200
-
-**Acceptable** for MVP, but significant at scale.
-
-**Future Optimization**:
-- Use temporary storage where possible
-- Batch operations to amortize fees
-- Optimize storage layout to reduce entries
-
----
-
-#### Transaction Throughput
-
-**Stellar Throughput**: ~1000 transactions per second
-
-**Bridgelet Operations**:
-- Each account requires 3+ transactions (init, record_payment, sweep)
-- Maximum theoretical throughput: ~333 accounts/second
-- Practical throughput: ~100-200 accounts/second (accounting for network variance)
-
-**Bottleneck**: Payment monitoring via Horizon API streaming
-
-**Scaling Strategy**:
-- Distribute monitoring across multiple instances
-- Use event indexing for async processing
-- Batch contract calls where possible
-
----
-
-#### Event Indexing Load
-
-**Event Volume**:
-- 4 events per account (created, payment, swept/expired)
-- At 100 accounts/sec: 400 events/sec
-- Daily: ~34.5 million events
-
-**Database Scaling**:
-- Requires robust event indexing infrastructure
-- Time-series database recommended (e.g., TimescaleDB)
-- Sharding by date or account ID range
-
-**Query Performance**:
-- Index on contract_id, event_type, ledger_sequence
-- Partition by date for historical queries
-- Cache frequently accessed data
-
----
-
-### Known Issues
-
-#### 1. No Rate Limiting
-
-**Issue**: Contract has no built-in rate limiting for operations.
-
-**Risk**: Potential for spam or abuse
-
-**Mitigation**: SDK-level rate limiting, monitoring for unusual activity
-
-**Future**: Implement on-chain rate limiting or fee structure
-
----
-
-#### 2. Expiry Window Precision
-
-**Issue**: Expiry based on ledger sequence, not exact time.
-
-**Impact**: 
-- Ledgers average ~5 seconds but can vary
-- Expiry timing not exact
-- ±5-10 second variance possible
-
-**Acceptable** for most use cases (24-hour expiry doesn't need second-precision)
-
-**Future**: Document clearly in SDK, provide time estimates with variance
-
----
-
-#### 3. Authorization via Soroban Runtime
-
-**Status**: Intended design uses Soroban's native authorization.
-
-**Benefits**: 
-- Standard Stellar authorization patterns
-- No custom signature management needed
-- Built-in replay protection
-
-**Implementation**: Contract uses `require_auth()` pattern, Soroban runtime handles verification
-
----
-
-#### 4. Sweep Destination Flexibility
-
-**Feature**: Optional sweep destination at initialization provides flexibility.
-
-**Benefits**:
-- Can specify destination upfront (if known)
-- Or leave as `None` for claim-based flows
-- Destination set at sweep time if not pre-specified
-
-**Use Cases**:
-- Pre-authorized: Set destination at creation
-- Claim-based: Leave as None, user claims to their wallet
-- Flexible: Change destination pattern based on use case
-
----
-
-#### 5. No Partial Sweep Support
-
-**Issue**: Must sweep entire payment amount.
-
-**Impact**: Cannot split funds across multiple destinations
-
-**Future**: Support partial sweeps with remaining balance tracking
-
----
-
-### Current Status Summary
-
-**Production Ready?**
-
-| Component | Status | Ready? | Notes |
-|-----------|--------|--------|-------|
-| EphemeralAccount Contract | ✅ Implemented | ⚠️ MVP | Uses different parameters than intended API |
-| SweepController Contract | ❌ Not implemented | ❌ No | Planned for V2 |
-| SDK Integration | ✅ Implemented | ✅ Yes | Handles transfers off-chain |
-| Event Indexing | ✅ Implemented | ✅ Yes | Basic indexing functional |
-| API Migration | ⏳ Planned | ⏳ Pending | Will migrate to README.md API in v2.0 |
-
-**Recommendation**: 
-- **Current MVP (v1.0)**: Suitable for testnet and controlled testing
-- **Future Production (v2.0)**: Will implement intended API from README.md
-- **Migration Path**: MVP → v2.0 with API alignment
-
----
-
-## Future Roadmap
-
-### V2 Planned Features
-
-#### 1. Implement SweepController Contract (High Priority)
-
-**Goal**: Move token transfer execution on-chain.
-
-**Benefits**:
-- On-chain transfer guarantees
-- Atomic multi-asset transfers
-- Better composability
-- Reduced SDK complexity
-
-**Timeline**: Next major release
-
----
-
-#### 2. Migrate to Intended API (High Priority)
-
-**Goal**: Update implementation to match README.md specification.
-
-**Changes Needed**:
-- Change `expiry_ledger` → `expiry_timestamp` (u32 → u64)
-- Change `recovery_address` → `sweep_destination: Option<Address>`
-- Remove explicit `auth_signature` parameter from sweep()
-- Add `account_id` to all events
-- Use Soroban native authorization
-
-**Timeline**: Next major version (v2.0)
-
----
-
-#### 3. Multi-Payment Support (Medium Priority)
-
-**Goal**: Support multiple payments per account.
-
-**Changes**:
-- Replace `payment_received: bool` with `payments: Vec<Payment>`
-- Add `payment_count: u32`
-- Update sweep logic to handle multiple payments
-- Event per payment
-
-**Timeline**: V3 or later
-
----
-
-#### 4. Batch Operations (Medium Priority)
-
-**Goal**: Enable batch initialization, sweeps, and expirations.
-
-**Benefits**:
-- Lower transaction fees
-- Faster bulk operations
-- Better UX for high-volume users
-
-**Implementation**:
-```rust
-pub fn batch_initialize(
-    env: Env,
-    accounts: Vec<AccountInit>
-) -> Result<Vec<Result<(), Error>>, Error>;
-
-pub fn batch_sweep(
-    env: Env,
-    sweeps: Vec<SweepRequest>
-) -> Result<Vec<Result<(), Error>>, Error>;
-```
-
-**Timeline**: V3
-
----
-
-#### 5. Multi-Sig Support (Low Priority)
-
-**Goal**: Support multi-sig addresses for creator and recovery.
-
-**Benefits**:
-- Shared governance
-- Better security for recovery
-- Enterprise use cases
-
-**Timeline**: V4 or later
-
----
-
-### Performance Optimizations
-
-#### 1. Storage Optimization
-
-**Goal**: Reduce per-account storage cost.
-
-**Strategies**:
-- Use temporary storage for non-critical data
-- Compress storage layout
-- Optimize DataKey enum sizes
-
-**Estimated Savings**: 20-30% storage cost reduction
-
----
-
-#### 2. Event Compression
-
-**Goal**: Reduce event payload sizes.
-
-**Strategies**:
-- Use compact data types
-- Remove redundant fields
-- Abbreviate field names
-
-**Estimated Savings**: 10-15% event cost reduction
-
----
-
-### Ecosystem Integration
-
-#### 1. Freighter Wallet Integration
-
-**Goal**: Enable direct sweeps from Freighter browser extension.
-
-**Requirements**:
-- Freighter API integration
-- Signature generation in browser
-- User-friendly claim flow
-
----
-
-#### 2. DEX Integration
-
-**Goal**: Enable automatic asset swaps during sweep.
-
-**Use Case**: Receive USDC, automatically sweep to XLM
-
-**Requirements**:
-- Integrate with Stellar DEX or AMM
-- Slippage protection
-- Price oracle integration
-
----
-
-#### 3. Payment Gateway Integration
-
-**Goal**: Enable Bridgelet as payment option in e-commerce.
-
-**Use Case**: One-time payment links for online stores
-
-**Requirements**:
-- Shopify/WooCommerce plugins
-- QR code generation
-- Payment confirmation webhooks
-
----
-
-### Documentation Improvements
-
-**Planned Additions**:
-- [ ] API reference documentation
-- [ ] Security audit report
-- [ ] Testing guide (unit, integration, e2e)
-- [ ] SDK integration tutorials
-- [ ] Video walkthrough
-- [ ] Architecture diagrams (high-resolution)
-
----
-
-## Conclusion
-
-Bridgelet Core provides a solid foundation for ephemeral account restrictions on the Stellar network. This document describes the **intended API design** as specified in README.md, which represents the target architecture for production deployment.
-
-**Key Takeaways**:
-
-1. **Timestamp-Based Expiry**: Uses familiar Unix timestamps for better developer experience and universal compatibility.
-
-2. **Flexible Sweep Destination**: Optional `sweep_destination` parameter enables both pre-authorized and claim-based flows.
-
-3. **Soroban Native Authorization**: Leverages Stellar's built-in authorization system for cleaner, more secure API.
-
-4. **Event-Driven Architecture**: All events include `account_id` for efficient filtering and indexing.
-
-5. **Separation of Concerns**: Authorization (EphemeralAccount) and execution (SweepController) are separated for modularity and security.
-
-6. **Instance Storage**: Used for durable state across account lifecycle.
-
-7. **Single Payment Model**: Enforces one-time use for simplicity and security.
-
-**Implementation Status**:
-
-This architecture document describes the **intended final design**. The current MVP implementation (v1.0) uses slightly different parameters:
-- MVP uses `expiry_ledger: u32` and `recovery_address` 
-- Intended API uses `expiry_timestamp: u64` and `sweep_destination: Option<Address>`
-- MVP includes explicit `auth_signature` parameter
-- Intended API uses Soroban native authorization
-
-**Migration to v2.0 will align implementation with this specification.**
-
-**Next Steps**:
-
-1. Complete MVP testing on testnet
-2. Migrate to intended API (v2.0)
-3. Implement SweepController contract
-4. Deploy to Stellar mainnet
-5. Expand SDK functionality
-6. Build ecosystem integrations
-
-For questions, issues, or contributions, see the main [Bridgelet repository](https://github.com/bridgelet-org/bridgelet).
-
----
-
-**Document Version**: 1.0  
-**Last Updated**: January 21, 2026  
-**API Specification**: As defined in README.md (source of truth)  
-**Contributors**: Bridgelet Core Team  
-**License**: MIT
