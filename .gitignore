@@ -57,7 +57,7 @@ coverage/
 *.lcov
 
 # Generated documentation
-/docs
+# /docs
 
 # Contract deployment artifacts
 contract-ids.json
