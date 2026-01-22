@@ -15,4 +15,6 @@ pub enum Error {
     NoPaymentReceived = 10,
     AccountExpired = 11,
     InvalidStatus = 12,
+    DuplicateAsset = 13,
+    TooManyPayments = 14,
 }

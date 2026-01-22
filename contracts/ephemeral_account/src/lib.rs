@@ -3,12 +3,14 @@
 mod errors;
 mod events;
 mod storage;
+#[cfg(test)]
+mod test;
 
-use soroban_sdk::{contract, contractimpl, contracttype, Address, BytesN, Env};
+use soroban_sdk::{contract, contractimpl, contracttype, Address, BytesN, Env, Vec};
 
 pub use errors::Error;
 pub use events::{AccountCreated, AccountExpired, PaymentReceived, SweepExecutedMulti, MultiPaymentReceived};
-pub use storage::{AccountStatus, DataKey};
+pub use storage::{AccountStatus, DataKey, Payment};
 
 #[contract]
 pub struct EphemeralAccountContract;
@@ -58,23 +60,19 @@ impl EphemeralAccountContract {
     }
 
     /// Record an inbound payment to this ephemeral account
-    /// Only the first payment is accepted
+    /// Multiple payments with different assets are supported
     ///
     /// # Arguments
     /// * `amount` - Payment amount
     /// * `asset` - Asset address
     ///
     /// # Errors
-    /// Returns Error::PaymentAlreadyReceived if payment already recorded
+    /// Returns Error::InvalidAmount if amount is not positive
+    /// Returns Error::DuplicateAsset if asset already has a payment
     pub fn record_payment(env: Env, amount: i128, asset: Address) -> Result<(), Error> {
         // Check initialized
         if !storage::is_initialized(&env) {
             return Err(Error::NotInitialized);
-        }
-
-        // Check if payment already received
-        if storage::has_payment_received(&env) {
-            return Err(Error::PaymentAlreadyReceived);
         }
 
         // Validate amount
@@ -82,20 +80,44 @@ impl EphemeralAccountContract {
             return Err(Error::InvalidAmount);
         }
 
-        // Record payment
-        storage::set_payment_received(&env, true);
-        storage::set_payment_amount(&env, amount);
-        storage::set_payment_asset(&env, &asset);
-        storage::set_status(&env, AccountStatus::PaymentReceived);
+        // Check for duplicate asset
+        if storage::get_payment(&env, &asset).is_some() {
+            return Err(Error::DuplicateAsset);
+        }
 
-        // Emit event
-        events::emit_payment_received(&env, amount, asset);
+        // Check payment limit to prevent gas issues (max 10 assets)
+        let payment_count = storage::get_total_payments(&env);
+        if payment_count >= 10 {
+            return Err(Error::TooManyPayments);
+        }
+
+        // Create payment with current timestamp
+        let payment = Payment {
+            asset: asset.clone(),
+            amount,
+            timestamp: env.ledger().timestamp(),
+        };
+
+        // Add payment
+        storage::add_payment(&env, payment);
+
+        // Update status only on first payment
+        if payment_count == 0 {
+            storage::set_status(&env, AccountStatus::PaymentReceived);
+        }
+
+        // Emit appropriate event
+        if payment_count == 0 {
+            events::emit_payment_received(&env, amount, asset);
+        } else {
+            events::emit_multi_payment_received(&env, asset, amount);
+        }
 
         Ok(())
     }
 
     /// Execute sweep to destination wallet
-    /// Transfers all funds to the specified destination
+    /// Transfers all funds from all assets to the specified destination atomically
     ///
     /// # Arguments
     /// * `destination` - Recipient wallet address
@@ -130,20 +152,24 @@ impl EphemeralAccountContract {
         // For MVP, we trust the SDK to only call with valid signatures
         Self::verify_sweep_authorization(&env, &destination, &auth_signature)?;
 
-        // Get payment details
-        let amount = storage::get_payment_amount(&env);
-        let asset = storage::get_payment_asset(&env);
+        // Get all payments
+        let payments = storage::get_all_payments(&env);
+        let mut payments_vec = Vec::new(&env);
+        for payment in payments.values() {
+            payments_vec.push_back(payment);
+        }
 
         // Update status before transfer to prevent reentrancy
         storage::set_status(&env, AccountStatus::Swept);
         storage::set_swept_to(&env, &destination);
 
-        // Note: Actual token transfer happens in the SDK via Stellar SDK
+        // Note: Actual token transfers happen in the SDK via Stellar SDK
         // This contract enforces the business logic and authorization
-        // The SDK will call this function, get approval, then execute the transfer
+        // The SDK will call this function, get approval, then execute all transfers atomically
+        // All transfers must succeed or the entire operation fails
 
-        // Emit event
-        events::emit_sweep_executed(&env, destination, amount, asset);
+        // Emit event with all assets
+        events::emit_sweep_executed_multi(&env, destination, &payments_vec);
 
         Ok(())
     }
@@ -198,15 +224,18 @@ impl EphemeralAccountContract {
         storage::set_status(&env, AccountStatus::Expired);
         storage::set_swept_to(&env, &recovery_address);
 
-        // Get payment details if payment was received
-        let amount = if storage::has_payment_received(&env) {
-            storage::get_payment_amount(&env)
+        // Get total amount from all payments if any payments were received
+        let total_amount = if storage::has_payment_received(&env) {
+            let payments = storage::get_all_payments(&env);
+            payments
+                .iter()
+                .fold(0, |sum, (_, payment)| sum + payment.amount)
         } else {
             0
         };
 
         // Emit event
-        events::emit_account_expired(&env, recovery_address, amount);
+        events::emit_account_expired(&env, recovery_address, total_amount);
 
         Ok(())
     }
@@ -217,16 +246,22 @@ impl EphemeralAccountContract {
             return Err(Error::NotInitialized);
         }
 
+        let payments = storage::get_all_payments(&env);
+        let payment_count = payments.len();
+
         Ok(AccountInfo {
             creator: storage::get_creator(&env),
             status: storage::get_status(&env),
             expiry_ledger: storage::get_expiry_ledger(&env),
             recovery_address: storage::get_recovery_address(&env),
-            payment_received: storage::has_payment_received(&env),
-            payment_amount: if storage::has_payment_received(&env) {
-                Some(storage::get_payment_amount(&env))
-            } else {
-                None
+            payment_received: payment_count > 0,
+            payment_count,
+            payments: {
+                let mut payments_vec = Vec::new(&env);
+                for payment in payments.values() {
+                    payments_vec.push_back(payment);
+                }
+                payments_vec
             },
             swept_to: storage::get_swept_to(&env),
         })
@@ -255,6 +290,7 @@ pub struct AccountInfo {
     pub expiry_ledger: u32,
     pub recovery_address: Address,
     pub payment_received: bool,
-    pub payment_amount: Option<i128>,
+    pub payment_count: u32,
+    pub payments: Vec<Payment>,
     pub swept_to: Option<Address>,
 }

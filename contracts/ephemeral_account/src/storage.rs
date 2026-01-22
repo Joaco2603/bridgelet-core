@@ -1,6 +1,14 @@
-use soroban_sdk::{contracttype, Address, Env};
+use soroban_sdk::{contracttype, Address, Env, Map};
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[contracttype]
+pub struct Payment {
+    pub asset: Address,
+    pub amount: i128,
+    pub timestamp: u64,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 #[contracttype]
 pub enum AccountStatus {
     Active = 0,
@@ -16,9 +24,7 @@ pub enum DataKey {
     Creator,
     ExpiryLedger,
     RecoveryAddress,
-    PaymentReceived,
-    PaymentAmount,
-    PaymentAsset,
+    Payments,
     Status,
     SweptTo,
 }
@@ -69,39 +75,39 @@ pub fn get_recovery_address(env: &Env) -> Address {
         .unwrap()
 }
 
-// Payment
+// Payments
+pub fn has_payments(env: &Env) -> bool {
+    env.storage().instance().has(&DataKey::Payments)
+}
+
+pub fn get_all_payments(env: &Env) -> Map<Address, Payment> {
+    env.storage()
+        .instance()
+        .get(&DataKey::Payments)
+        .unwrap_or_else(|| Map::new(env))
+}
+
+pub fn set_all_payments(env: &Env, payments: &Map<Address, Payment>) {
+    env.storage().instance().set(&DataKey::Payments, payments);
+}
+
+pub fn add_payment(env: &Env, payment: Payment) {
+    let mut payments = get_all_payments(env);
+    payments.set(payment.asset.clone(), payment);
+    set_all_payments(env, &payments);
+}
+
+pub fn get_payment(env: &Env, asset: &Address) -> Option<Payment> {
+    let payments = get_all_payments(env);
+    payments.get(asset.clone())
+}
+
+pub fn get_total_payments(env: &Env) -> u32 {
+    get_all_payments(env).len()
+}
+
 pub fn has_payment_received(env: &Env) -> bool {
-    env.storage().instance().has(&DataKey::PaymentReceived)
-}
-
-pub fn set_payment_received(env: &Env, value: bool) {
-    env.storage()
-        .instance()
-        .set(&DataKey::PaymentReceived, &value);
-}
-
-pub fn set_payment_amount(env: &Env, amount: i128) {
-    env.storage()
-        .instance()
-        .set(&DataKey::PaymentAmount, &amount);
-}
-
-pub fn get_payment_amount(env: &Env) -> i128 {
-    env.storage()
-        .instance()
-        .get(&DataKey::PaymentAmount)
-        .unwrap_or(0)
-}
-
-pub fn set_payment_asset(env: &Env, asset: &Address) {
-    env.storage().instance().set(&DataKey::PaymentAsset, asset);
-}
-
-pub fn get_payment_asset(env: &Env) -> Address {
-    env.storage()
-        .instance()
-        .get(&DataKey::PaymentAsset)
-        .unwrap()
+    has_payments(env)
 }
 
 // Status
