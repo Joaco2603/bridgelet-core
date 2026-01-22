@@ -56,9 +56,10 @@ node_modules/
 coverage/
 *.lcov
 
-# Generated documentation
-# /docs
+# Generated documentation (except architecture.md)
+
 
 # Contract deployment artifacts
 contract-ids.json
 deployed-contracts.json
+
