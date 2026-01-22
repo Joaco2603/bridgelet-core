@@ -57,23 +57,9 @@ coverage/
 *.lcov
 
 # Generated documentation (except architecture.md)
-/docs/*
-!/docs/architecture.md
-!/docs/.gitkeep
+
 
 # Contract deployment artifacts
 contract-ids.json
 deployed-contracts.json
 
-# Planning and tracking files (not for version control)
-task_plan.md
-findings.md
-progress.md
-verification_*.md
-alignment_*.md
-COMPLETION_SUMMARY.md
-ALIGNMENT_COMPLETE.md
-requirement.md
-
-.claude/
-CLAUDE.md
