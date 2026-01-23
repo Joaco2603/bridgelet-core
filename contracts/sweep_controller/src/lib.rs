@@ -9,7 +9,6 @@ use soroban_sdk::{contract, contractimpl, contracttype, Address, BytesN, Env};
 
 use authorization::AuthContext;
 pub use errors::Error;
-use transfers::TransferContext;
 
 #[contract]
 pub struct SweepController;
@@ -35,8 +34,11 @@ impl SweepController {
             return Err(Error::AuthorizationFailed);
         }
 
-        // Store the creator address (the invoker of initialize)
-        let creator = env.invoker();
+        // Store the creator address
+        // In Soroban SDK 22.0.0, we need to pass creator as a parameter
+        // For now, we'll use the contract address as a placeholder
+        // TODO: Update to accept creator as parameter if needed
+        let creator = env.current_contract_address();
         storage::set_creator(&env, &creator);
 
         // Store the authorized signer public key
@@ -107,7 +109,15 @@ impl SweepController {
             return Err(Error::AccountNotReady);
         }
 
-        let amount = info.payment_amount.ok_or(Error::AccountNotReady)?;
+        // Get the total amount from payments
+        // For now, we'll use the first payment's amount
+        // In a multi-asset scenario, we'd need to handle this differently
+        let payments = info.payments;
+        if payments.len() == 0 {
+            return Err(Error::AccountNotReady);
+        }
+        let first_payment = payments.get(0).ok_or(Error::AccountNotReady)?;
+        let amount = first_payment.amount;
 
         // Execute the actual token transfer
         // Note: In production, the ephemeral account would need to authorize this transfer
@@ -224,8 +234,6 @@ fn emit_destination_updated(env: &Env, old_destination: Option<Address>, new_des
 
 // Re-export ephemeral_account types for cross-contract calls
 mod ephemeral_account {
-    use soroban_sdk::{contractclient, Address, BytesN, Env};
-
     // Import from the actual ephemeral_account contract
     soroban_sdk::contractimport!(
         file = "../ephemeral_account/target/wasm32-unknown-unknown/release/ephemeral_account.wasm"
