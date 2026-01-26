@@ -283,6 +283,3 @@ impl EphemeralAccountContract {
         Ok(())
     }
 }
-
-
-

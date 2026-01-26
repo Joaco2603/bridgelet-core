@@ -13,17 +13,13 @@ use soroban_sdk::{xdr::ToXdr, Address, BytesN, Env};
 ///
 /// # Returns
 /// BytesN<32> containing the hash of the message components
-fn construct_sweep_message(
-    env: &Env,
-    destination: &Address,
-    contract_id: &Address,
-) -> BytesN<32> {
+fn construct_sweep_message(env: &Env, destination: &Address, contract_id: &Address) -> BytesN<32> {
     // Get current nonce
     let nonce = storage::get_sweep_nonce(env);
 
     // Construct the message by concatenating:
     // - destination (serialized as bytes)
-    // - nonce (as u64, 8 bytes)  
+    // - nonce (as u64, 8 bytes)
     // - contract_id (serialized as bytes)
     let mut message = soroban_sdk::Bytes::new(env);
 
@@ -69,8 +65,8 @@ pub fn verify_sweep_auth(
     signature: &BytesN<64>,
 ) -> Result<(), Error> {
     // Get the authorized signer public key from storage
-    let authorized_signer = storage::get_authorized_signer(env)
-        .ok_or(Error::AuthorizedSignerNotSet)?;
+    let authorized_signer =
+        storage::get_authorized_signer(env).ok_or(Error::AuthorizedSignerNotSet)?;
 
     // Get the sweep controller contract address
     let contract_id = env.current_contract_address();

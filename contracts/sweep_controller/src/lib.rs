@@ -5,12 +5,12 @@ mod errors;
 mod storage;
 mod transfers;
 
-use soroban_sdk::{contract, contractimpl, contracttype, Address, BytesN, Env};
 use crate::ephemeral_account::Client as EphemeralAccountClient;
+use soroban_sdk::{contract, contractimpl, contracttype, Address, BytesN, Env};
 
 use authorization::AuthContext;
-pub use errors::Error;
 use bridgelet_shared::{AccountInfo, AccountStatus};
+pub use errors::Error;
 use transfers::TransferContext;
 
 #[contract]
@@ -79,8 +79,8 @@ impl SweepController {
     ) -> Result<(), Error> {
         // Validate destination if authorized destination is set (locked mode)
         if storage::has_authorized_destination(&env) {
-            let authorized_dest = storage::get_authorized_destination(&env)
-                .ok_or(Error::UnauthorizedDestination)?;
+            let authorized_dest =
+                storage::get_authorized_destination(&env).ok_or(Error::UnauthorizedDestination)?;
             if destination != authorized_dest {
                 return Err(Error::UnauthorizedDestination);
             }
@@ -156,10 +156,7 @@ impl SweepController {
     /// # Errors
     /// Returns Error::AuthorizationFailed if caller is not the creator
     /// Returns Error::AccountAlreadySwept if a sweep has already been executed
-    pub fn update_authorized_destination(
-        env: Env,
-        new_destination: Address,
-    ) -> Result<(), Error> {
+    pub fn update_authorized_destination(env: Env, new_destination: Address) -> Result<(), Error> {
         // Verify creator authorization
         let creator = storage::get_creator(&env).ok_or(Error::AuthorizationFailed)?;
         creator.require_auth();
