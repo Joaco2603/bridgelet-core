@@ -215,11 +215,23 @@ mod test {
         let auth_sig = BytesN::from_array(&env, &[0u8; 64]);
         client.sweep(&destination, &auth_sig);
 
-        // Verify status is Swept
         assert_eq!(client.get_status(), AccountStatus::Swept);
 
-        // Check that events were emitted (sweep and reserve reclaimed)
-        // In a real scenario, we'd parse env.events() to verify both events
+        // Find the ReserveReclaimed event and assert its fields
+        let events = env.events().all();
+        let reserve_event = events
+            .iter()
+            .find(|(_, topics, _)| topics.get(0) == Some(symbol_short!("reserve").into()));
+
+        assert!(
+            reserve_event.is_some(),
+            "ReserveReclaimed event was not emitted"
+        );
+
+        let (_, _, data) = reserve_event.unwrap();
+        let reclaimed: ReserveReclaimed = data.into_val(&env);
+        assert_eq!(reclaimed.destination, destination);
+        assert_eq!(reclaimed.amount, 1_000_000_000i128);
     }
 
     #[test]
