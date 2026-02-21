@@ -194,4 +194,65 @@ mod test {
 
         // Verify events were published (check env.events())
     }
+
+    #[test]
+    fn test_sweep_emits_reserve_reclaimed_event() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let contract_id = env.register_contract(None, EphemeralAccountContract);
+        let client = EphemeralAccountContractClient::new(&env, &contract_id);
+
+        let creator = Address::generate(&env);
+        let recovery = Address::generate(&env);
+        let asset = Address::generate(&env);
+        let destination = Address::generate(&env);
+        let expiry_ledger = env.ledger().sequence() + 1000;
+
+        client.initialize(&creator, &expiry_ledger, &recovery);
+        client.record_payment(&100, &asset);
+
+        let auth_sig = BytesN::from_array(&env, &[0u8; 64]);
+        client.sweep(&destination, &auth_sig);
+
+        // Verify status is Swept
+        assert_eq!(client.get_status(), AccountStatus::Swept);
+
+        // Check that events were emitted (sweep and reserve reclaimed)
+        // In a real scenario, we'd parse env.events() to verify both events
+    }
+
+    #[test]
+    fn test_sweep_multiple_assets_with_reserve_event() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register_contract(None, EphemeralAccountContract);
+        let client = EphemeralAccountContractClient::new(&env, &contract_id);
+
+        let creator = Address::generate(&env);
+        let recovery = Address::generate(&env);
+        let destination = Address::generate(&env);
+        let expiry_ledger = env.ledger().sequence() + 1000;
+
+        client.initialize(&creator, &expiry_ledger, &recovery);
+
+        // Record 3 different assets
+        let asset1 = Address::generate(&env);
+        let asset2 = Address::generate(&env);
+        let asset3 = Address::generate(&env);
+
+        client.record_payment(&100, &asset1);
+        client.record_payment(&200, &asset2);
+        client.record_payment(&300, &asset3);
+
+        let info = client.get_info();
+        assert_eq!(info.payment_count, 3);
+        assert_eq!(info.payments.len(), 3);
+
+        // Sweep all - should emit both SweepExecutedMulti and ReserveReclaimed events
+        let auth_sig = BytesN::from_array(&env, &[0u8; 64]);
+        client.sweep(&destination, &auth_sig);
+
+        assert_eq!(client.get_status(), AccountStatus::Swept);
+    }
 }

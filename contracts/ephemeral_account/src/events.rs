@@ -34,6 +34,15 @@ pub struct MultiPaymentReceived {
 pub struct AccountExpired {
     pub recovery_address: Address,
     pub amount_returned: i128,
+    pub reserve_amount: i128,
+}
+
+/// Reserve reclaimed event - emitted when base reserve is reclaimed
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ReserveReclaimed {
+    pub destination: Address,
+    pub amount: i128,
 }
 
 pub fn emit_account_created(env: &Env, creator: Address, expiry_ledger: u32) {
@@ -62,10 +71,16 @@ pub fn emit_multi_payment_received(env: &Env, asset: Address, amount: i128) {
     env.events().publish((symbol_short!("multi_pay"),), event);
 }
 
-pub fn emit_account_expired(env: &Env, recovery_address: Address, amount_returned: i128) {
+pub fn emit_account_expired(env: &Env, recovery_address: Address, amount_returned: i128, reserve_amount: i128) {
     let event = AccountExpired {
         recovery_address,
         amount_returned,
+        reserve_amount,
     };
     env.events().publish((symbol_short!("expired"),), event);
+}
+
+pub fn emit_reserve_reclaimed(env: &Env, destination: Address, amount: i128) {
+    let event = ReserveReclaimed { destination, amount };
+    env.events().publish((symbol_short!("reserve"),), event);
 }
