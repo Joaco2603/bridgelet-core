@@ -5,7 +5,7 @@ mod errors;
 mod storage;
 // mod transfers;
 
-use crate::ephemeral_account::Client as EphemeralAccountClient;
+use ephemeral_account::EphemeralAccountContractClient as EphemeralAccountClient;
 use soroban_sdk::{contract, contractimpl, contracttype, Address, BytesN, Env};
 
 use authorization::AuthContext;
@@ -224,12 +224,4 @@ fn emit_destination_updated(env: &Env, old_destination: Option<Address>, new_des
     };
     env.events()
         .publish((soroban_sdk::symbol_short!("dest_upd"),), event);
-}
-
-// Re-export ephemeral_account types for cross-contract calls
-mod ephemeral_account {
-    // Import from the actual ephemeral_account contract
-    soroban_sdk::contractimport!(
-        file = "/home/levai/bridgelet-core/target/wasm32-unknown-unknown/release/ephemeral_account.wasm"
-    );
 }
