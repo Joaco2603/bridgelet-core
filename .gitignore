@@ -20,6 +20,7 @@ Cargo.lock
 # IDE/Editor files
 .vscode/
 .idea/
+.qoder/
 *.swp
 *.swo
 *~
@@ -51,6 +52,9 @@ Thumbs.db
 
 # Node modules (if you have any JS tooling)
 node_modules/
+
+# test snapshots
+**/test_snapshots/
 
 # Test coverage
 coverage/

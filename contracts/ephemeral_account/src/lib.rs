@@ -11,7 +11,8 @@ use soroban_sdk::{contract, contractimpl, Address, BytesN, Env, Vec};
 pub use bridgelet_shared::{AccountInfo, AccountStatus, Payment};
 pub use errors::Error;
 pub use events::{
-    AccountCreated, AccountExpired, MultiPaymentReceived, PaymentReceived, SweepExecutedMulti,
+    AccountCreated, AccountExpired, MultiPaymentReceived, PaymentReceived, ReserveReclaimed,
+    SweepExecutedMulti,
 };
 pub use storage::DataKey;
 
@@ -171,8 +172,12 @@ impl EphemeralAccountContract {
         // The SDK will call this function, get approval, then execute all transfers atomically
         // All transfers must succeed or the entire operation fails
 
-        // Emit event with all assets
-        events::emit_sweep_executed_multi(&env, destination, &payments_vec);
+        // Base reserve amount (1 XLM in stroops)
+        let reserve_amount = 1_000_000_000i128;
+
+        // Emit events for sweep execution and reserve reclamation
+        events::emit_sweep_executed_multi(&env, destination.clone(), &payments_vec);
+        events::emit_reserve_reclaimed(&env, destination, reserve_amount);
 
         Ok(())
     }
@@ -237,8 +242,12 @@ impl EphemeralAccountContract {
             0
         };
 
-        // Emit event
-        events::emit_account_expired(&env, recovery_address, total_amount);
+        // Base reserve amount (1 XLM in stroops)
+        let reserve_amount = 1_000_000_000i128;
+
+        // Emit events for account expiration and reserve reclamation
+        events::emit_account_expired(&env, recovery_address.clone(), total_amount, reserve_amount);
+        events::emit_reserve_reclaimed(&env, recovery_address, reserve_amount);
 
         Ok(())
     }
