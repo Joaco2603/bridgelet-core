@@ -239,7 +239,9 @@ impl EphemeralAccountContract {
             let payments = storage::get_all_payments(&env);
             let mut total = 0i128;
             for (_, payment) in payments.iter() {
-                total = total.checked_add(payment.amount).ok_or(Error::InvalidAmount)?;
+                total = total
+                    .checked_add(payment.amount)
+                    .ok_or(Error::InvalidAmount)?;
             }
             total
         } else {

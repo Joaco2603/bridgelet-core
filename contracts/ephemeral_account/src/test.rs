@@ -312,6 +312,9 @@ mod test {
         assert_eq!(client.get_status(), AccountStatus::Swept);
         assert_eq!(client.get_reserve_remaining(), 0);
         assert!(client.is_reserve_reclaimed());
-        assert_eq!(client.get_reserve_reclaim_event_count(), reserve_events_before);
+        assert_eq!(
+            client.get_reserve_reclaim_event_count(),
+            reserve_events_before
+        );
     }
 }

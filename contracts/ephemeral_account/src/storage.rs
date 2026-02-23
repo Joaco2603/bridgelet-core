@@ -39,16 +39,23 @@ pub fn get_creator(env: &Env) -> Address {
 
 // Expiry
 pub fn set_expiry_ledger(env: &Env, ledger: u32) {
-    env.storage().instance().set(&DataKey::ExpiryLedger, &ledger);
+    env.storage()
+        .instance()
+        .set(&DataKey::ExpiryLedger, &ledger);
 }
 
 pub fn get_expiry_ledger(env: &Env) -> u32 {
-    env.storage().instance().get(&DataKey::ExpiryLedger).unwrap()
+    env.storage()
+        .instance()
+        .get(&DataKey::ExpiryLedger)
+        .unwrap()
 }
 
 // Recovery address
 pub fn set_recovery_address(env: &Env, address: &Address) {
-    env.storage().instance().set(&DataKey::RecoveryAddress, address);
+    env.storage()
+        .instance()
+        .set(&DataKey::RecoveryAddress, address);
 }
 
 pub fn get_recovery_address(env: &Env) -> Address {
@@ -137,7 +144,9 @@ pub fn get_base_reserve_remaining(env: &Env) -> i128 {
 }
 
 pub fn set_available_reserve(env: &Env, amount: i128) {
-    env.storage().instance().set(&DataKey::AvailableReserve, &amount);
+    env.storage()
+        .instance()
+        .set(&DataKey::AvailableReserve, &amount);
 }
 
 pub fn get_available_reserve(env: &Env) -> i128 {
@@ -161,11 +170,16 @@ pub fn is_reserve_reclaimed(env: &Env) -> bool {
 }
 
 pub fn set_last_sweep_id(env: &Env, sweep_id: u64) {
-    env.storage().instance().set(&DataKey::LastSweepId, &sweep_id);
+    env.storage()
+        .instance()
+        .set(&DataKey::LastSweepId, &sweep_id);
 }
 
 pub fn get_last_sweep_id(env: &Env) -> u64 {
-    env.storage().instance().get(&DataKey::LastSweepId).unwrap_or(0)
+    env.storage()
+        .instance()
+        .get(&DataKey::LastSweepId)
+        .unwrap_or(0)
 }
 
 pub fn set_reserve_event_count(env: &Env, count: u32) {
@@ -182,7 +196,9 @@ pub fn get_reserve_event_count(env: &Env) -> u32 {
 }
 
 pub fn set_last_reserve_event(env: &Env, event: &ReserveReclaimed) {
-    env.storage().instance().set(&DataKey::LastReserveEvent, event);
+    env.storage()
+        .instance()
+        .set(&DataKey::LastReserveEvent, event);
 }
 
 pub fn get_last_reserve_event(env: &Env) -> Option<ReserveReclaimed> {
